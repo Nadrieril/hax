@@ -24,16 +24,21 @@ pub enum ImplExprPathChunk {
 #[derive(
     Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
-pub enum ImplExprAtom {
+pub enum ImplExprKind {
     /// A concrete `impl Trait for Type {}` item.
     Concrete {
         id: GlobalIdent,
+        /// The generic arguments required for the impl.
         generics: Vec<GenericArg>,
+        /// The trait implementations required for the impl.
+        impl_exprs: Vec<ImplExpr>,
     },
     /// A context-bound clause like `where T: Trait`.
     LocalBound {
         predicate_id: PredicateId,
+        /// This caches the clause we're referring to.
         r#trait: Binder<TraitRef>,
+        ///
         path: Vec<ImplExprPathChunk>,
     },
     /// The automatic clause `Self: Trait` present inside a `impl Trait for Type {}` item.
@@ -54,10 +59,20 @@ pub enum ImplExprAtom {
     Todo(String),
 }
 
-/// An `ImplExpr` describes the full data of a trait implementation. Because of generics, this may
-/// need to combine several concrete trait implementation items. For example, `((1u8, 2u8),
-/// "hello").clone()` combines the generic implementation of `Clone` for `(A, B)` with the
-/// concrete implementations for `u8` and `&str`, represented as a tree.
+/// An `ImplExpr` describes the full data of a trait implementation.
+///
+/// Because of generics, this may need to combine several concrete trait implementation items. For
+/// example, `(1u8, "hello").clone()` combines the generic implementation of `Clone` for `(A, B)`
+/// with the concrete implementations for `u8` and `&str`.
+///
+/// Concretely, we consider each generic trait implementation as a function that takes generic
+/// arguments and witnesses of the required predicates, and returns an implementation for the
+/// trait. In the example above, we have:
+/// ```ignore
+/// impl<A: Clone, B: Clone> Clone for (A, B) { ... }
+/// ```
+/// We pass it `A=u8`, `B=&str` and two `ImplExpr`s that describe the respective implementations of
+/// `u8: Clone` and `&str: Clone`.
 #[derive(
     Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -65,9 +80,7 @@ pub struct ImplExpr {
     /// The trait this is an impl for.
     pub r#trait: TraitRef,
     /// The kind of implemention of the root of the tree.
-    pub r#impl: ImplExprAtom,
-    /// A list of `ImplExpr`s required to fully specify the trait references in `impl`.
-    pub args: Vec<ImplExpr>,
+    pub r#impl: ImplExprKind,
 }
 
 // FIXME: this has visibility `pub(crate)` only because of https://github.com/rust-lang/rust/issues/83049
@@ -253,7 +266,7 @@ pub(crate) mod search_clause {
     }
 }
 
-impl ImplExprAtom {
+impl ImplExprKind {
     fn with_args(self, args: Vec<ImplExpr>, r#trait: TraitRef) -> ImplExpr {
         ImplExpr {
             r#impl: self,
@@ -319,7 +332,7 @@ impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
                 impl_def_id,
                 args: generics,
                 nested,
-            }) => ImplExprAtom::Concrete {
+            }) => ImplExprKind::Concrete {
                 id: impl_def_id.sinto(s),
                 generics: generics.sinto(s),
             }
@@ -351,10 +364,10 @@ impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
                     .sinto(s);
                 let path = path.sinto(s);
                 if apred.is_extra_self_predicate {
-                    ImplExprAtom::SelfImpl { r#trait, path }
+                    ImplExprKind::SelfImpl { r#trait, path }
                         .with_args(impl_exprs(s, &nested), trait_ref)
                 } else {
-                    ImplExprAtom::LocalBound {
+                    ImplExprKind::LocalBound {
                         predicate_id: apred.predicate.predicate_id(s),
                         r#trait,
                         path,
@@ -368,8 +381,8 @@ impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
             // up.
             ImplSource::Builtin(source, _ignored) => {
                 let atom = match source {
-                    BuiltinImplSource::Object { .. } => ImplExprAtom::Dyn,
-                    _ => ImplExprAtom::Builtin {
+                    BuiltinImplSource::Object { .. } => ImplExprKind::Dyn,
+                    _ => ImplExprKind::Builtin {
                         r#trait: self.skip_binder().sinto(s),
                     },
                 };
