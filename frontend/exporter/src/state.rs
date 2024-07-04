@@ -1,100 +1,4 @@
 use crate::prelude::*;
-use paste::paste;
-
-macro_rules! mk_aux {
-    ($state:ident {$($lts:lifetime)*} $field:ident {$($field_type:tt)+} {$($gen:tt)*} {$($gen_full:tt)*} {$($params:tt)*} {$($fields:tt)*}) => {
-        paste ! {
-            pub trait [<Has $field:camel>]<$($lts,)*> {
-                fn $field(self: &Self) -> $($field_type)+<$($lts)*>;
-            }
-            impl<$($lts,)*$($gen)*> [<Has $field:camel>]<$($lts,)*> for $state<$($params)*> {
-                fn $field(self: &Self) -> $($field_type)+<$($lts)*> {
-                    self.$field.clone()
-                }
-            }
-            pub trait [<Has $field:camel Setter>]<$($lts)*> {
-                type Out;
-                // fn [<with_ $field>]<$($lts,)*$($gen)*>(self: Self, $field: $($field_type)+<$($lts)*>) -> $state<$($params)*>;
-                fn [<with_ $field>](self: Self, $field: $($field_type)+<$($lts)*>) -> Self::Out;
-            }
-            // const _: &str = stringify!(
-            #[allow(unused)]
-            impl<$($lts,)*$($gen_full)*> [<Has $field:camel Setter>]<$($lts,)*> for $state<$($gen_full)*> {
-                type Out = $state<$($params)*>;
-                fn [<with_ $field>](self: Self, $field: $($field_type)+<$($lts)*>) -> Self::Out {
-                    let __this_field = $field;
-                    let $state { $($fields,)* } = self;
-                    let $field = __this_field;
-                    $state { $($fields,)* }
-                }
-            }
-            // );
-            // pub trait [<Has $field:camel Setter>]<$($lts,)*$($gen_full)*> {
-            //     fn [<with_ $field>](self: Self, $field: $($field_type)+<$($lts)*>) -> $state<$($params)*>;
-            // }
-            // impl<$($lts,)*$($gen_full)*> [<Has $field:camel Setter>]<$($lts,)*$($gen_full)*> for $state<$($gen_full)*> {
-            //     fn [<with_ $field>](self: Self, $field: $($field_type)+<$($lts)*>) -> $state<$($params)*> {
-            //         let __this_field = $field;
-            //         let $state { $($fields,)* } = self;
-            //         let $field = __this_field;
-            //         $state { $($fields,)* }
-            //     }
-            // }
-        }
-    };
-}
-macro_rules! mk_is_state_trait {
-    ($lts:tt {$($finished:tt)*} {{$f0:ident, $($l:tt)*} $($f:tt)*} $($generic:tt)*) => {
-        paste! {mk_is_state_trait!{
-                $lts {$($finished)* [<Has $f0:camel Setter>] <$($l)*> +} {$($f)*} $($generic)*
-                // $lts {$($finished)* [<Has $f0:camel Setter>] <$($l)* $($generic)*> +} {$($f)*} $($generic)*
-        }}
-    };
-    ({$($glts:lifetime,)*} {$($finished:tt)*} {} $($generic:tt)*) => {
-        pub trait IsState<$($glts,)*> = $($finished)*;
-    };
-}
-macro_rules! mk {
-    (struct $state:ident<$($glts:lifetime),*> {$($field:ident : {$($lts:lifetime),*} $field_type:ty),*$(,)?}) => {
-        mk!(@$state {} {$($field)*} {$($field: {$($lts),*} {$field_type},)*});
-        mk_is_state_trait!({$($glts,)*} {} {$({$field, $($lts,)*})*} $([<$field:camel>],)*);
-    };
-    (@$state:ident {$($acc:tt)*} $fields:tt {
-        $field:ident : $lts:tt $field_type:tt
-        $(,$($rest:tt)*)?
-    }) => {mk!(@$state {
-        $($acc)* $fields $field: $lts $field_type,
-    } $fields {$($($rest)*)?} );};
-    (@$state:ident $body:tt $fields:tt {$(,)?}) => { mk! (@@ $state $body ); };
-    (@@$state:ident {$({$($fields:tt)*} $field:ident : {$($lts:lifetime)*} {$($field_type:tt)+},)*}) => {
-        paste! {
-            #[derive(Clone)]
-            pub struct $state<$([<$field:camel>],)*>{
-                $(pub $field: [<$field:camel>],)*
-            }
-        }
-        $(
-            macro_rules! __inner_helper {
-                ($gen:tt {$$($full_gen:tt)*} {$$($params:tt)*} $field $$($rest:tt)*) => {
-                    paste! {__inner_helper!(
-                        $gen {$$($full_gen)*[<$field:camel>],}
-                        {$$($params)*$($field_type)+<$($lts,)*>,} $$($rest)*
-                    );}
-                };
-                ({$$($gen:tt)*} {$$($full_gen:tt)*} {$$($params:tt)*} $i:ident $$($rest:tt)*) => {
-                    paste! {__inner_helper!(
-                        {$$($gen)*[<$i:camel>],} {$$($full_gen)*[<$i:camel>],}
-                        {$$($params)*[<$i:camel>],} $$($rest)*
-                    );}
-                };
-                ($gen:tt $full_gen:tt $params:tt $$(,)?) => {
-                    mk_aux!($state {$($lts)*} $field {$($field_type)+} $gen $full_gen $params {$($fields)*});
-                };
-            }
-            __inner_helper!({} {} {} $($fields)*);
-        )*
-    };
-}
 
 mod types {
     use crate::prelude::*;
@@ -167,14 +71,148 @@ mod types {
     pub type RcMir<'tcx> = Rc<rustc_middle::mir::Body<'tcx>>;
 }
 
-mk!(
-    struct State<'tcx> {
-        base: {'tcx} types::Base,
-        thir: {'tcx} types::RcThir,
-        mir: {'tcx} types::RcMir,
-        owner_id: {} rustc_hir::def_id::DefId,
+#[derive(Clone)]
+pub struct State<Base, Thir, Mir, OwnerId> {
+    pub base: Base,
+    pub thir: Thir,
+    pub mir: Mir,
+    pub owner_id: OwnerId,
+}
+
+pub trait HasBase<'tcx> {
+    fn base(self: &Self) -> types::Base<'tcx>;
+}
+impl<'tcx, Thir, Mir, OwnerId> HasBase<'tcx> for State<types::Base<'tcx>, Thir, Mir, OwnerId> {
+    fn base(self: &Self) -> types::Base<'tcx> {
+        self.base.clone()
     }
-);
+}
+pub trait HasBaseSetter<'tcx> {
+    type Out;
+    fn with_base(self: Self, base: types::Base<'tcx>) -> Self::Out;
+}
+#[allow(unused)]
+impl<'tcx, Base, Thir, Mir, OwnerId> HasBaseSetter<'tcx> for State<Base, Thir, Mir, OwnerId> {
+    type Out = State<types::Base<'tcx>, Thir, Mir, OwnerId>;
+    fn with_base(self: Self, base: types::Base<'tcx>) -> Self::Out {
+        let __this_field = base;
+        let State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        } = self;
+        let base = __this_field;
+        State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        }
+    }
+}
+
+pub trait HasThir<'tcx> {
+    fn thir(self: &Self) -> types::RcThir<'tcx>;
+}
+impl<'tcx, Base, Mir, OwnerId> HasThir<'tcx> for State<Base, types::RcThir<'tcx>, Mir, OwnerId> {
+    fn thir(self: &Self) -> types::RcThir<'tcx> {
+        self.thir.clone()
+    }
+}
+pub trait HasThirSetter<'tcx> {
+    type Out;
+    fn with_thir(self: Self, thir: types::RcThir<'tcx>) -> Self::Out;
+}
+#[allow(unused)]
+impl<'tcx, Base, Thir, Mir, OwnerId> HasThirSetter<'tcx> for State<Base, Thir, Mir, OwnerId> {
+    type Out = State<Base, types::RcThir<'tcx>, Mir, OwnerId>;
+    fn with_thir(self: Self, thir: types::RcThir<'tcx>) -> Self::Out {
+        let __this_field = thir;
+        let State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        } = self;
+        let thir = __this_field;
+        State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        }
+    }
+}
+
+pub trait HasMir<'tcx> {
+    fn mir(self: &Self) -> types::RcMir<'tcx>;
+}
+impl<'tcx, Base, Thir, OwnerId> HasMir<'tcx> for State<Base, Thir, types::RcMir<'tcx>, OwnerId> {
+    fn mir(self: &Self) -> types::RcMir<'tcx> {
+        self.mir.clone()
+    }
+}
+pub trait HasMirSetter<'tcx> {
+    type Out;
+    fn with_mir(self: Self, mir: types::RcMir<'tcx>) -> Self::Out;
+}
+#[allow(unused)]
+impl<'tcx, Base, Thir, Mir, OwnerId> HasMirSetter<'tcx> for State<Base, Thir, Mir, OwnerId> {
+    type Out = State<Base, Thir, types::RcMir<'tcx>, OwnerId>;
+    fn with_mir(self: Self, mir: types::RcMir<'tcx>) -> Self::Out {
+        let __this_field = mir;
+        let State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        } = self;
+        let mir = __this_field;
+        State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        }
+    }
+}
+
+pub trait HasOwnerId {
+    fn owner_id(self: &Self) -> rustc_hir::def_id::DefId;
+}
+impl<Base, Thir, Mir> HasOwnerId for State<Base, Thir, Mir, rustc_hir::def_id::DefId> {
+    fn owner_id(self: &Self) -> rustc_hir::def_id::DefId {
+        self.owner_id.clone()
+    }
+}
+pub trait HasOwnerIdSetter {
+    type Out;
+    fn with_owner_id(self: Self, owner_id: rustc_hir::def_id::DefId) -> Self::Out;
+}
+#[allow(unused)]
+impl<Base, Thir, Mir, OwnerId> HasOwnerIdSetter for State<Base, Thir, Mir, OwnerId> {
+    type Out = State<Base, Thir, Mir, rustc_hir::def_id::DefId>;
+    fn with_owner_id(self: Self, owner_id: rustc_hir::def_id::DefId) -> Self::Out {
+        let __this_field = owner_id;
+        let State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        } = self;
+        let owner_id = __this_field;
+        State {
+            base,
+            thir,
+            mir,
+            owner_id,
+        }
+    }
+}
+
+pub trait IsState<'tcx> =
+    HasBaseSetter<'tcx> + HasThirSetter<'tcx> + HasMirSetter<'tcx> + HasOwnerIdSetter;
 
 pub use types::*;
 
