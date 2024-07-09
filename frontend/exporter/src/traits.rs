@@ -299,16 +299,6 @@ pub trait IntoImplExpr<'tcx> {
     ) -> ImplExpr;
 }
 
-impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitPredicate<'tcx> {
-    fn impl_expr<S: UnderOwnerState<'tcx>>(
-        &self,
-        s: &S,
-        param_env: rustc_middle::ty::ParamEnv<'tcx>,
-    ) -> ImplExpr {
-        use rustc_middle::ty::ToPolyTraitRef;
-        self.to_poly_trait_ref().impl_expr(s, param_env)
-    }
-}
 impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
     #[tracing::instrument(level = "trace", skip(s))]
     fn impl_expr<S: UnderOwnerState<'tcx>>(
@@ -405,9 +395,11 @@ pub fn super_clause_to_clause_and_impl_expr<'tcx, S: UnderOwnerState<'tcx>>(
         clause.sinto(s).id
     };
     let new_clause = clause.instantiate_supertrait(tcx, impl_trait_ref);
+    use rustc_middle::ty::ToPolyTraitRef;
     let impl_expr = new_clause
         .as_predicate()
         .as_trait_clause()?
+        .to_poly_trait_ref()
         .impl_expr(s, s.param_env());
     let mut new_clause_no_binder = new_clause.sinto(s);
     new_clause_no_binder.id = original_predicate_id;

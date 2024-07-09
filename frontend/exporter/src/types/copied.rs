@@ -2506,6 +2506,7 @@ pub enum ExprKind {
             owner_id: gstate.owner_id(),
             base: gstate.base(),
             mir: (),
+            binder: (),
         };
         TO_TYPE::Closure {
             params: thir.params.raw.sinto(s),
@@ -3113,6 +3114,7 @@ pub enum ItemKind<Body: IsBody> {
                 thir: s.clone(),
                 owner_id: s.owner_id(),
                 base: Base {ty_alias_mode: true, ..s.base()},
+                binder: (),
                 mir: (),
             };
             x.sinto(s)
@@ -3522,15 +3524,18 @@ pub fn binder_sinto<'tcx, S: UnderOwnerState<'tcx>, T1, T2>(
     binder: &rustc_middle::ty::Binder<'tcx, T1>,
 ) -> Binder<T2>
 where
-    T1: SInto<S, T2> + Clone + rustc_middle::ty::TypeFoldable<rustc_middle::ty::TyCtxt<'tcx>>,
+    T1: SInto<State<Base<'tcx>, UnitBinder<'tcx>, (), (), rustc_hir::def_id::DefId>, T2>
+        + Clone
+        + rustc_middle::ty::TypeFoldable<rustc_middle::ty::TyCtxt<'tcx>>,
 {
-    let ty = std::any::type_name::<T1>();
-    let stack = &s.base().binder_stack;
-    warning!(s, "Pushing a binder"; {binder, ty, stack});
     let bound_vars = binder.bound_vars().sinto(s);
-    let s_under_binder = s
-        .clone()
-        .with_base(s.base().under_binder(binder.map_bound_ref(|_| ())));
+    let s_under_binder = State {
+        owner_id: s.owner_id(),
+        base: s.base(),
+        thir: (),
+        mir: (),
+        binder: Rc::new(binder.map_bound_ref(|_| ())),
+    };
     let value = binder.as_ref().skip_binder().sinto(&s_under_binder);
     Binder { value, bound_vars }
 }
