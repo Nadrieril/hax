@@ -182,3 +182,25 @@ mod type_alias_bounds_issue_707 {
     type SynonymA<T> = StructWithGenericBounds<T>;
     type SynonymB<T> = StructWithGenericBounds<(T, T)>;
 }
+
+mod binder_sadness_747 {
+    pub trait Trait {}
+
+    impl<U, T> Trait for Result<T, U>
+    where
+        for<'a> &'a Result<T, U>: IntoIterator,
+        for<'a> <&'a Result<T, U> as IntoIterator>::Item: Copy,
+    {
+    }
+
+    trait Iterator {
+        type Item;
+    }
+
+    fn filter1<P: for<'a> FnMut<(&'a I::Item,)>, I: Iterator>() {}
+
+    // ImplExprNotFound
+    // fn filter2<P: for<'a> FnMut(&'a I::Item), I: Iterator>() {}
+
+    fn filter3<P: FnMut(&I::Item), I: Iterator>() {}
+}

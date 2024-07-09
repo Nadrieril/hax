@@ -2,6 +2,7 @@ use crate::prelude::*;
 
 mod types {
     use crate::prelude::*;
+    use rustc_middle::ty;
     use std::cell::RefCell;
     use std::collections::HashSet;
 
@@ -41,6 +42,7 @@ mod types {
         /// more details, please see
         /// https://github.com/hacspec/hax/issues/707.
         pub ty_alias_mode: bool,
+        pub binder_stack: Vec<ty::Binder<'tcx, ()>>,
     }
 
     impl<'tcx> Base<'tcx> {
@@ -60,7 +62,13 @@ mod types {
                 exported_spans: Rc::new(RefCell::new(HashSet::new())),
                 exported_def_ids: Rc::new(RefCell::new(HashSet::new())),
                 ty_alias_mode: false,
+                binder_stack: Default::default(),
             }
+        }
+        pub fn under_binder(&self, binder: ty::Binder<'tcx, ()>) -> Self {
+            let mut this = self.clone();
+            this.binder_stack.push(binder);
+            this
         }
     }
 
@@ -88,13 +96,13 @@ impl<'tcx, Thir, Mir, OwnerId> HasBase<'tcx> for State<types::Base<'tcx>, Thir, 
     }
 }
 pub trait HasBaseSetter<'tcx> {
-    type Out;
-    fn with_base(self: Self, base: types::Base<'tcx>) -> Self::Out;
+    fn with_base(self: Self, base: types::Base<'tcx>) -> Self;
 }
 #[allow(unused)]
-impl<'tcx, Base, Thir, Mir, OwnerId> HasBaseSetter<'tcx> for State<Base, Thir, Mir, OwnerId> {
-    type Out = State<types::Base<'tcx>, Thir, Mir, OwnerId>;
-    fn with_base(self: Self, base: types::Base<'tcx>) -> Self::Out {
+impl<'tcx, Thir, Mir, OwnerId> HasBaseSetter<'tcx>
+    for State<types::Base<'tcx>, Thir, Mir, OwnerId>
+{
+    fn with_base(self: Self, base: types::Base<'tcx>) -> Self {
         let __this_field = base;
         let State {
             base,

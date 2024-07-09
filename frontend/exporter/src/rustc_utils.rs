@@ -104,7 +104,7 @@ pub fn poly_trait_ref<'tcx, S: UnderOwnerState<'tcx>>(
 
 #[tracing::instrument(skip(s))]
 pub(crate) fn arrow_of_sig<'tcx, S: UnderOwnerState<'tcx>>(sig: &ty::PolyFnSig<'tcx>, s: &S) -> Ty {
-    Ty::Arrow(Box::new(sig.sinto(s)))
+    Ty::Arrow(Box::new(binder_sinto(s, sig)))
 }
 
 #[tracing::instrument(skip(s))]

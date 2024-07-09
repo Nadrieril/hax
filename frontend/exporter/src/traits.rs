@@ -1,18 +1,20 @@
 use crate::prelude::*;
 
 #[derive(AdtInto)]
-#[args(<'tcx, S: UnderOwnerState<'tcx> >, from: search_clause::PathChunk<'tcx>, state: S as tcx)]
+#[args(<'tcx, S: UnderOwnerState<'tcx> >, from: search_clause::PathChunk<'tcx>, state: S as s)]
 #[derive(
     Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
 pub enum ImplExprPathChunk {
     AssocItem {
         item: AssocItem,
+        #[map(binder_sinto(s, &x))]
         predicate: Binder<TraitPredicate>,
         predicate_id: PredicateId,
         index: usize,
     },
     Parent {
+        #[map(binder_sinto(s, &x))]
         predicate: Binder<TraitPredicate>,
         predicate_id: PredicateId,
         index: usize,
@@ -32,6 +34,7 @@ pub enum ImplExprAtom {
     },
     /// A context-bound clause like `where T: Trait`.
     LocalBound {
+        // TODO: could this be a whole Predicate?
         predicate_id: PredicateId,
         r#trait: Binder<TraitRef>,
         path: Vec<ImplExprPathChunk>,
@@ -74,7 +77,7 @@ pub struct ImplExpr {
 pub(crate) mod search_clause {
     use crate::prelude::UnderOwnerState;
     use crate::rustc_utils::*;
-    use crate::{IntoPredicateId, PredicateId};
+    use crate::PredicateId;
     use rustc_middle::ty::*;
 
     fn predicates_to_poly_trait_predicates<'tcx>(
@@ -120,6 +123,7 @@ pub(crate) mod search_clause {
     ///
     /// [1]: https://github.com/rust-lang/rust/blob/b0889cb4ed0e6f3ed9f440180678872b02e7052c/compiler/rustc_builtin_macros/src/deriving/hash.rs#L20
     /// [2]: https://github.com/rust-lang/rust/blob/b0889cb4ed0e6f3ed9f440180678872b02e7052c/compiler/rustc_middle/src/ty/print/mod.rs#L141
+    #[tracing::instrument(level = "trace", skip(s))]
     fn predicate_equality<'tcx, S: UnderOwnerState<'tcx>>(
         x: Predicate<'tcx>,
         y: Predicate<'tcx>,
@@ -200,6 +204,7 @@ pub(crate) mod search_clause {
             target: PolyTraitRef<'tcx>,
             param_env: rustc_middle::ty::ParamEnv<'tcx>,
         ) -> Option<Path<'tcx>> {
+            use crate::SInto;
             let tcx = s.base().tcx;
             if predicate_equality(self.upcast(tcx), target.upcast(tcx), param_env, s) {
                 return Some(vec![]);
@@ -221,7 +226,7 @@ pub(crate) mod search_clause {
                         cons(
                             PathChunk::Parent {
                                 predicate: p,
-                                predicate_id: p.predicate_id(s),
+                                predicate_id: p.sinto(s).id,
                                 index,
                             },
                             path,
@@ -238,7 +243,7 @@ pub(crate) mod search_clause {
                                     cons(
                                         PathChunk::AssocItem {
                                             item,
-                                            predicate_id: p.predicate_id(s),
+                                            predicate_id: p.sinto(s).id,
                                             predicate: p,
                                             index,
                                         },
@@ -312,8 +317,7 @@ impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
         param_env: rustc_middle::ty::ParamEnv<'tcx>,
     ) -> ImplExpr {
         use rustc_trait_selection::traits::*;
-        let trait_ref: Binder<TraitRef> = self.sinto(s);
-        let trait_ref = trait_ref.value;
+        let trait_ref = self.skip_binder().sinto(s);
         match select_trait_candidate(s, param_env, *self) {
             ImplSource::UserDefined(ImplSourceUserDefinedData {
                 impl_def_id,
@@ -343,19 +347,21 @@ impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
                     })
                 };
                 use rustc_middle::ty::ToPolyTraitRef;
-                let r#trait = apred
-                    .predicate
-                    .as_trait_clause()
-                    .s_unwrap(s)
-                    .to_poly_trait_ref()
-                    .sinto(s);
+                let r#trait = binder_sinto(
+                    s,
+                    &apred
+                        .predicate
+                        .as_trait_clause()
+                        .s_unwrap(s)
+                        .to_poly_trait_ref(),
+                );
                 let path = path.sinto(s);
                 if apred.is_extra_self_predicate {
                     ImplExprAtom::SelfImpl { r#trait, path }
                         .with_args(impl_exprs(s, &nested), trait_ref)
                 } else {
                     ImplExprAtom::LocalBound {
-                        predicate_id: apred.predicate.predicate_id(s),
+                        predicate_id: apred.predicate.sinto(s).id,
                         r#trait,
                         path,
                     }
@@ -370,7 +376,7 @@ impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
                 let atom = match source {
                     BuiltinImplSource::Object { .. } => ImplExprAtom::Dyn,
                     _ => ImplExprAtom::Builtin {
-                        r#trait: self.skip_binder().sinto(s),
+                        r#trait: trait_ref.clone(),
                     },
                 };
                 atom.with_args(vec![], trait_ref)
@@ -396,7 +402,7 @@ pub fn super_clause_to_clause_and_impl_expr<'tcx, S: UnderOwnerState<'tcx>>(
         // We don't want the id of the substituted clause id, but the
         // original clause id (with, i.e., `Self`)
         let s = &with_owner_id(s.base(), (), (), impl_trait_ref.def_id());
-        clause.predicate_id(s)
+        clause.sinto(s).id
     };
     let new_clause = clause.instantiate_supertrait(tcx, impl_trait_ref);
     let impl_expr = new_clause

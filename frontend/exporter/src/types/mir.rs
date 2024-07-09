@@ -821,15 +821,6 @@ impl<'tcx, S: BaseState<'tcx> + HasOwnerId> SInto<S, MirFnSig> for rustc_middle:
     }
 }
 
-// TODO: we need this function because sometimes, Rust doesn't infer the proper
-// typeclass instance.
-pub(crate) fn poly_fn_sig_to_mir_poly_fn_sig<'tcx, S: BaseState<'tcx> + HasOwnerId>(
-    sig: &rustc_middle::ty::PolyFnSig<'tcx>,
-    s: &S,
-) -> MirPolyFnSig {
-    sig.sinto(s)
-}
-
 #[derive(AdtInto, Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[args(<'tcx, S: UnderOwnerState<'tcx> + HasMir<'tcx>>, from: rustc_middle::mir::AggregateKind<'tcx>, state: S as s)]
 pub enum AggregateKind {
@@ -865,7 +856,7 @@ pub enum AggregateKind {
         // closure like any top-level function.
         let closure = generics.as_closure();
         let sig = closure.sig();
-        let sig = poly_fn_sig_to_mir_poly_fn_sig(&sig, s);
+        let sig = binder_sinto(s, &sig);
 
         // Solve the trait obligations. Note that we solve the parent
         let tcx = s.base().tcx;
