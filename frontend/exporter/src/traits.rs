@@ -76,7 +76,6 @@ pub mod rustc {
     pub(crate) mod search_clause {
         use crate::prelude::UnderOwnerState;
         use crate::rustc_utils::*;
-        use crate::{IntoPredicateId, PredicateId};
         use rustc_middle::ty::*;
 
         fn predicates_to_poly_trait_predicates<'tcx>(
