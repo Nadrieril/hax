@@ -238,6 +238,7 @@ pub(crate) mod search_clause {
                     self.associated_items_trait_predicates(s)
                         .into_iter()
                         .filter_map(|(item, binder)| {
+                            // This skips an `EarlyBinder`, likely for GATs
                             binder.skip_binder().into_iter().find_map(|(index, p)| {
                                 recurse(p).map(|path| {
                                     cons(
@@ -307,6 +308,7 @@ impl<'tcx> IntoImplExpr<'tcx> for rustc_middle::ty::PolyTraitRef<'tcx> {
         param_env: rustc_middle::ty::ParamEnv<'tcx>,
     ) -> ImplExpr {
         use rustc_trait_selection::traits::*;
+        // TODO: why
         let trait_ref = self.skip_binder().sinto(s);
         match select_trait_candidate(s, param_env, *self) {
             ImplSource::UserDefined(ImplSourceUserDefinedData {

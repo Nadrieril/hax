@@ -8,7 +8,7 @@ impl<'tcx, T: ty::TypeFoldable<ty::TyCtxt<'tcx>>> ty::Binder<'tcx, T> {
         tcx: ty::TyCtxt<'tcx>,
         generics: &[ty::GenericArg<'tcx>],
     ) -> ty::Binder<'tcx, T> {
-        self.rebind(ty::EarlyBinder::bind(self.clone().skip_binder()).instantiate(tcx, generics))
+        ty::EarlyBinder::bind(self).instantiate(tcx, generics)
     }
 }
 
@@ -65,7 +65,7 @@ impl<'tcx> ty::TyCtxt<'tcx> {
                     // An opaque type (e.g. `impl Trait`) provides
                     // predicates by itself: we need to account for them.
                     self.explicit_item_bounds(did)
-                        .skip_binder()
+                        .skip_binder() // Skips an `EarlyBinder`, likely for GATs
                         .iter()
                         .copied()
                         .collect()

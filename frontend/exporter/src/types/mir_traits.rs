@@ -76,6 +76,7 @@ pub fn solve_item_traits<'tcx, S: UnderOwnerState<'tcx>>(
             // Warning: this removes the binder; we need to add it back to avoid escaping bound
             // variables.
             // Remark: there is also EarlyBinder::subst(...)
+            // TODO: this is wrong, the inner binder should stay.
             let value = rustc_middle::ty::EarlyBinder::bind(pred_kind.skip_binder());
             tcx.instantiate_and_normalize_erasing_regions(generics, param_env, value)
         };
