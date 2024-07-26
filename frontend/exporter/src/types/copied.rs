@@ -124,19 +124,41 @@ fn get_generic_predicates<'tcx, S: UnderOwnerState<'tcx>>(
 
 #[cfg(feature = "rustc")]
 fn get_item_predicates<'tcx, S: UnderOwnerState<'tcx>>(s: &S, def_id: RDefId) -> GenericPredicates {
+    use crate::rustc_middle::query::Key;
     let tcx = s.base().tcx;
     let parent_id = tcx.parent(def_id);
-    // `item_bounds` cannot be called on a trait impl item, and returns empty on an inherent impl
-    // item. So we only call it for trait decl items.
+    // TODO: we probably want to use `explicit_item_bounds` instead, but should do so consistently.
     let predicates = match tcx.def_kind(parent_id) {
         rustc_hir::def::DefKind::Trait => {
-            // TODO: we probably want to use `explicit_item_bounds` instead, but should do so
-            // consistently.
             let clauses = tcx.item_bounds(def_id).instantiate_identity();
-            use crate::rustc_middle::query::Key;
             let span = clauses.default_span(tcx);
             clauses.iter().map(|c| (c, span)).collect::<Vec<_>>()
         }
+        rustc_hir::def::DefKind::Impl { of_trait: true } => {
+            // TODO: this isn't enough: we can't use a hax predicate to solve traits. We must solve
+            // traits ourselves. Trait impl items as well as trait item defaults as well as trait
+            // impls themselves must come with solved `ImplExpr`s.
+            // Note: start with investigating where else we solve trait, e.g. inside bodies. Easier
+            // to figure out the interface for trait solving there.
+            let assoc_item = tcx.associated_item(def_id);
+            let implemented_item_id = assoc_item.trait_item_def_id.unwrap();
+            let clauses = tcx.item_bounds(implemented_item_id);
+            // To get the predicates of the item, we get the ones from the trait declaration and
+            // substitute with the trait arguments, so that the result makes sense in the context
+            // of the impl.
+            let rustc_middle::ty::ImplSubject::Trait(trait_ref) =
+                tcx.impl_subject(parent_id).instantiate_identity()
+            else {
+                unreachable!()
+            };
+            let param_env = tcx.param_env(def_id);
+            let clauses =
+                tcx.instantiate_and_normalize_erasing_regions(trait_ref.args, param_env, clauses);
+            let span = clauses.default_span(tcx);
+            clauses.iter().map(|c| (c, span)).collect::<Vec<_>>()
+        }
+        // `item_bounds` can only be called in one of the above cases or on an inherent impl item.
+        // In that case it returns an empty list of bounds so we do the same here.
         _ => Vec::new(),
     };
     let predicates = process_generic_predicates(s, predicates.as_slice());
