@@ -98,6 +98,7 @@ macro_rules! mk {
 
 mod types {
     use crate::prelude::*;
+    use rustc_middle::ty;
     use std::cell::RefCell;
     use std::collections::HashSet;
 
@@ -137,6 +138,7 @@ mod types {
         /// more details, please see
         /// https://github.com/hacspec/hax/issues/707.
         pub ty_alias_mode: bool,
+        pub binder_stack: Vec<ty::Binder<'tcx, ()>>,
     }
 
     impl<'tcx> Base<'tcx> {
@@ -156,7 +158,18 @@ mod types {
                 exported_spans: Rc::new(RefCell::new(HashSet::new())),
                 exported_def_ids: Rc::new(RefCell::new(HashSet::new())),
                 ty_alias_mode: false,
+                binder_stack: Default::default(),
             }
+        }
+        pub fn under_binder(&self, binder: ty::Binder<'tcx, ()>) -> Self {
+            let mut this = self.clone();
+            this.binder_stack.push(binder);
+            this
+        }
+        pub fn without_binder(&self) -> Self {
+            let mut this = self.clone();
+            this.binder_stack.clear();
+            this
         }
     }
 

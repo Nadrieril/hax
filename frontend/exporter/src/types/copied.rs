@@ -1771,7 +1771,7 @@ pub enum AliasKind {
 #[cfg(feature = "rustc")]
 impl Alias {
     #[tracing::instrument(level = "trace", skip(s))]
-    fn from<'tcx, S: BaseState<'tcx> + HasOwnerId>(
+    fn from<'tcx, S: UnderOwnerState<'tcx>>(
         s: &S,
         alias_kind: &rustc_type_ir::AliasTyKind,
         alias_ty: &rustc_middle::ty::AliasTy<'tcx>,
@@ -1779,52 +1779,34 @@ impl Alias {
         use rustc_type_ir::AliasTyKind as RustAliasKind;
         let kind = match alias_kind {
             RustAliasKind::Projection => {
-                use rustc_middle::ty::{Binder, EarlyBinder, TypeVisitableExt};
                 let tcx = s.base().tcx;
                 let trait_ref = alias_ty.trait_ref(tcx);
-                // Sometimes (see
-                // https://github.com/hacspec/hax/issues/495), we get
-                // trait refs with escaping bound vars. Empirically,
-                // this seems fine. If we detect such a situation, we
-                // emit a warning with a lot of debugging information.
-                let poly_trait_ref = if trait_ref.has_escaping_bound_vars() {
-                    let trait_ref_and_generics = alias_ty.trait_ref_and_own_args(tcx);
-                    let rebased_generics =
-                        alias_ty.rebase_inherent_args_onto_impl(alias_ty.args, tcx);
-                    let norm_rebased_generics = tcx.try_instantiate_and_normalize_erasing_regions(
-                        rebased_generics,
-                        s.param_env(),
-                        EarlyBinder::bind(trait_ref),
-                    );
-                    let norm_generics = tcx.try_instantiate_and_normalize_erasing_regions(
-                        alias_ty.args,
-                        s.param_env(),
-                        EarlyBinder::bind(trait_ref),
-                    );
-                    let early_binder_generics =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            EarlyBinder::bind(trait_ref).instantiate(tcx, alias_ty.args)
-                        }));
-                    let early_binder_rebased_generics =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            EarlyBinder::bind(trait_ref).instantiate(tcx, alias_ty.args)
-                        }));
-                    warning!(
-                        s,
-                        "Hax frontend found a projected type with escaping bound vars. Please report https://github.com/hacspec/hax/issues/495";
-                        {alias_ty, alias_kind, trait_ref, trait_ref_and_generics, rebased_generics,
-                         norm_rebased_generics, norm_generics,
-                         early_binder_generics, early_binder_rebased_generics}
-                    );
-                    // we cannot use `Binder::dummy`: it asserts that
-                    // there is no any escaping bound vars
-                    Binder::bind_with_vars(trait_ref, rustc_middle::ty::List::empty())
-                } else {
-                    Binder::dummy(trait_ref)
+                // If we are under a binder, we need to re-bind the correct variables before
+                // attempting to trait-solve.
+                let poly_trait_ref = match s.base().binder_stack.as_slice() {
+                    // This is super weird, wtf.
+                    [] => {
+                        // We expect that this never happens in real rust code, but unsure today.
+                        supposely_unreachable_fatal!(s, "Solving under zero binders"; {})
+                        // Binder::dummy(trait_ref)
+                    }
+                    [binder] => binder.rebind(trait_ref),
+                    binders => {
+                        // We expect that this never happens in real rust code, but unsure today.
+                        supposely_unreachable_fatal!(s, "Solving under several binders"; {binders})
+                    }
                 };
                 AliasKind::Projection {
                     assoc_item: tcx.associated_item(alias_ty.def_id).sinto(s),
-                    impl_expr: poly_trait_ref.impl_expr(s, s.param_env()),
+                    impl_expr: {
+                        let s = &State {
+                            owner_id: s.owner_id(),
+                            base: s.base().without_binder(),
+                            thir: (),
+                            mir: (),
+                        };
+                        poly_trait_ref.impl_expr(s, s.param_env())
+                    },
                 }
             }
             RustAliasKind::Inherent => AliasKind::Inherent,
@@ -1892,7 +1874,12 @@ pub enum Ty {
     Slice(Box<Ty>),
     RawPtr(Box<Ty>, Mutability),
     Ref(Region, Box<Ty>, Mutability),
-    Dynamic(Vec<Binder<ExistentialPredicate>>, Region, DynKind),
+    Dynamic(
+        #[map(x.iter().map(|b| b.binder_sinto(state)).collect())]
+        Vec<Binder<ExistentialPredicate>>,
+        Region,
+        DynKind,
+    ),
     Coroutine(DefId, Vec<GenericArg>),
     Never,
     Tuple(Vec<Ty>),
@@ -2470,17 +2457,18 @@ pub enum ExprKind {
                 });
                 let mut translated_generics = generics.sinto(gstate);
                 let tcx = gstate.base().tcx;
+                // If this is a method, get the implicit `Self: Trait` clause.
                 r#trait = (|| {
-                    let assoc_item = tcx.opt_associated_item(*def_id)?;
-                    let assoc_trait = tcx.trait_of_item(assoc_item.def_id)?;
-                    let trait_ref = ty::TraitRef::new(tcx, assoc_trait, generics.iter());
-                    let impl_expr = {
-                        // TODO: we should not wrap into a dummy binder
-                        let poly_trait_ref = ty::Binder::dummy(trait_ref);
-                        poly_trait_ref.impl_expr(gstate, gstate.param_env())
-                    };
-                    let assoc_generics = tcx.generics_of(assoc_item.def_id);
+                    // Check if this is a method.
+                    let assoc = tcx.opt_associated_item(*def_id)?;
+                    // Cut the generics to separate the generics of the method itself from those of
+                    // its parent.
+                    let assoc_generics = tcx.generics_of(*def_id);
+                    let parent_generics = 
+                        tcx.mk_args_from_iter(generics.iter().take(assoc_generics.parent_count));
                     let assoc_generics = translated_generics.drain(0..assoc_generics.parent_count);
+                    // TODO: this is broken, we should substitute generics.
+                    let impl_expr = item_self_clause(gstate, &assoc)?;
                     Some((impl_expr, assoc_generics.collect()))
                 })();
                 generic_args = translated_generics;
@@ -2735,8 +2723,8 @@ pub enum ExprKind {
         #[value({
             let tcx = gstate.base().tcx;
             tcx.opt_associated_item(*def_id).as_ref().and_then(|assoc| {
-                poly_trait_ref(gstate, assoc, args)
-            }).map(|poly_trait_ref| poly_trait_ref.impl_expr(gstate, gstate.param_env()))
+                item_self_clause(gstate, assoc)
+            })
         })]
         r#impl: Option<ImplExpr>,
     },
@@ -3691,7 +3679,7 @@ pub struct Clause {
 #[cfg(feature = "rustc")]
 impl<'tcx, S: UnderOwnerState<'tcx>> SInto<S, Clause> for rustc_middle::ty::Clause<'tcx> {
     fn sinto(&self, s: &S) -> Clause {
-        let kind = self.kind().sinto(s);
+        let kind = self.kind().binder_sinto(s);
         let id = kind
             .clone()
             .map(|clause_kind| PredicateKind::Clause(clause_kind))
@@ -3705,7 +3693,7 @@ impl<'tcx, S: UnderOwnerState<'tcx>> SInto<S, Clause>
     for rustc_middle::ty::PolyTraitPredicate<'tcx>
 {
     fn sinto(&self, s: &S) -> Clause {
-        let kind: Binder<_> = self.sinto(s);
+        let kind: Binder<_> = self.binder_sinto(s);
         let kind: Binder<ClauseKind> = kind.map(|x| ClauseKind::Trait(x));
         let id = kind
             .clone()
@@ -3726,7 +3714,7 @@ pub struct Predicate {
 #[cfg(feature = "rustc")]
 impl<'tcx, S: UnderOwnerState<'tcx>> SInto<S, Predicate> for rustc_middle::ty::Predicate<'tcx> {
     fn sinto(&self, s: &S) -> Predicate {
-        let kind = self.kind().sinto(s);
+        let kind = self.kind().binder_sinto(s);
         let id = kind.predicate_id();
         Predicate { kind, id }
     }
@@ -3787,15 +3775,43 @@ pub struct GenericPredicates {
     pub predicates: Vec<(Predicate, Span)>,
 }
 
+// /// Binders are subtle: we don't use `SInto` to ensure we convert binders without being careful. In
+// /// particular, when going under a binder you must use this function otherwise we lose track of the
+// /// surrounding binder and get escaping bound vars. See e.g. #747.
+// #[cfg(feature = "rustc")]
+// impl<'tcx, S: UnderOwnerState<'tcx>, T1, T2> SInto<S, Binder<T2>>
+//     for rustc_middle::ty::Binder<'tcx, T1>
+// where
+//     T1: SInto<State<Base<'tcx>, (), (), rustc_hir::def_id::DefId>, T2>
+//         + Clone
+//         + rustc_middle::ty::TypeFoldable<rustc_middle::ty::TyCtxt<'tcx>>,
+// {
+//     fn sinto(&self, s: &S) -> Binder<T2> {
+//         self.binder_sinto(s)
+//     }
+// }
+
 #[cfg(feature = "rustc")]
-impl<'tcx, S: UnderOwnerState<'tcx>, T1, T2> SInto<S, Binder<T2>>
-    for rustc_middle::ty::Binder<'tcx, T1>
+#[extension_traits::extension(pub(crate) trait BinderSInto)]
+impl<'tcx, S: UnderOwnerState<'tcx>, T1, T2> rustc_middle::ty::Binder<'tcx, T1>
 where
-    T1: SInto<S, T2> + Clone + rustc_middle::ty::TypeFoldable<rustc_middle::ty::TyCtxt<'tcx>>,
+    T1: SInto<State<Base<'tcx>, (), (), rustc_hir::def_id::DefId>, T2>
+        + Clone
+        + rustc_middle::ty::TypeFoldable<rustc_middle::ty::TyCtxt<'tcx>>,
 {
-    fn sinto(&self, s: &S) -> Binder<T2> {
+    fn binder_sinto(&self, s: &S) -> Binder<T2> {
+        let ty = std::any::type_name::<T1>();
+        let stack = &s.base().binder_stack;
+        warning!(s, "Pushing a binder"; {self, ty, stack});
         let bound_vars = self.bound_vars().sinto(s);
-        let value = self.as_ref().skip_binder().sinto(s);
+        let s_under_binder = State {
+            owner_id: s.owner_id(),
+            base: s.base().under_binder(self.map_bound_ref(|_| ())),
+            thir: (),
+            mir: (),
+        };
+        // Skips the binder but ensures the bound variables are in scope.
+        let value = self.as_ref().skip_binder().sinto(&s_under_binder);
         Binder { value, bound_vars }
     }
 }
@@ -3841,7 +3857,7 @@ pub struct ClosureArgs {
     pub kind: ClosureKind,
     #[value(self.parent_args().sinto(s))]
     pub parent_args: Vec<GenericArg>,
-    #[value(self.sig().sinto(s))]
+    #[value(self.sig().binder_sinto(s))]
     pub sig: PolyFnSig,
     #[value(self.upvar_tys().sinto(s))]
     pub upvar_tys: Vec<Ty>,

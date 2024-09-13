@@ -81,19 +81,21 @@ impl<'tcx> ty::TyCtxt<'tcx> {
     }
 }
 
-pub fn poly_trait_ref<'tcx, S: UnderOwnerState<'tcx>>(
+pub fn item_self_clause<'tcx, S: UnderOwnerState<'tcx>>(
     s: &S,
     assoc: &ty::AssocItem,
-    generics: ty::GenericArgsRef<'tcx>,
-) -> Option<ty::PolyTraitRef<'tcx>> {
+) -> Option<ImplExpr> {
+    // TODO: this is broken, we should substitute generics.
     let tcx = s.base().tcx;
-    let r#trait = tcx.trait_of_item(assoc.def_id)?;
-    Some(ty::Binder::dummy(ty::TraitRef::new(tcx, r#trait, generics)))
+    // Unsure how to get the correct binder here. The clause could very well be
+    // `Self: for<'a> Trait<'a>`. `Binder::dummy` will panic in such a case.
+    let poly_trait_ref = ty::Binder::dummy(ty::TraitRef::identity(tcx, assoc.def_id));
+    Some(poly_trait_ref.impl_expr(s, s.param_env()))
 }
 
 #[tracing::instrument(skip(s))]
 pub(crate) fn arrow_of_sig<'tcx, S: UnderOwnerState<'tcx>>(sig: &ty::PolyFnSig<'tcx>, s: &S) -> Ty {
-    Ty::Arrow(Box::new(sig.sinto(s)))
+    Ty::Arrow(Box::new(sig.binder_sinto(s)))
 }
 
 #[tracing::instrument(skip(s))]

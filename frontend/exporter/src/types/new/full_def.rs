@@ -1,6 +1,8 @@
 use crate::prelude::*;
 
 #[cfg(feature = "rustc")]
+use crate::types::copied::BinderSInto;
+#[cfg(feature = "rustc")]
 use rustc_middle::ty;
 #[cfg(feature = "rustc")]
 use rustc_span::def_id::DefId as RDefId;
@@ -139,7 +141,7 @@ pub enum FullDefKind {
         predicates: GenericPredicates,
         #[value(s.base().tcx.codegen_fn_attrs(s.owner_id()).inline.sinto(s))]
         inline: InlineAttr,
-        #[value(s.base().tcx.fn_sig(s.owner_id()).instantiate_identity().sinto(s))]
+        #[value(s.base().tcx.fn_sig(s.owner_id()).instantiate_identity().binder_sinto(s))]
         sig: PolyFnSig,
     },
     /// Associated function: `impl MyStruct { fn associated() {} }` or `trait Foo { fn associated()
@@ -155,7 +157,7 @@ pub enum FullDefKind {
         predicates: GenericPredicates,
         #[value(s.base().tcx.codegen_fn_attrs(s.owner_id()).inline.sinto(s))]
         inline: InlineAttr,
-        #[value(s.base().tcx.fn_sig(s.owner_id()).instantiate_identity().sinto(s))]
+        #[value(s.base().tcx.fn_sig(s.owner_id()).instantiate_identity().binder_sinto(s))]
         sig: PolyFnSig,
     },
     /// A closure, coroutine, or coroutine-closure.

@@ -2,6 +2,7 @@ use crate::prelude::*;
 
 /// Retrieve the trait information, typically for a function call.
 /// TODO: rename
+/// TODO: merge with item_self_clause etc
 pub fn get_trait_info<'tcx, S: UnderOwnerState<'tcx>>(
     s: &S,
     generics: rustc_middle::ty::GenericArgsRef<'tcx>,

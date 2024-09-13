@@ -891,7 +891,7 @@ pub enum AggregateKind {
         // type, regions, etc. variables, which means we can treat the local
         // closure like any top-level function.
         let closure = generics.as_closure();
-        let sig = closure.sig().sinto(s);
+        let sig = closure.sig().binder_sinto(s);
 
         // Solve the trait obligations. Note that we solve the parent
         let tcx = s.base().tcx;

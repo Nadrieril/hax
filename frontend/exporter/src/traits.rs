@@ -7,12 +7,14 @@ use crate::prelude::*;
 pub enum ImplExprPathChunk {
     AssocItem {
         item: AssocItem,
+        #[map(x.binder_sinto(s))]
         predicate: Binder<TraitPredicate>,
         #[value(<_ as SInto<_, Clause>>::sinto(predicate, s).id)]
         predicate_id: PredicateId,
         index: usize,
     },
     Parent {
+        #[map(x.binder_sinto(s))]
         predicate: Binder<TraitPredicate>,
         #[value(<_ as SInto<_, Clause>>::sinto(predicate, s).id)]
         predicate_id: PredicateId,
@@ -153,6 +155,7 @@ pub mod rustc {
                 predicates: impl Iterator<Item = Predicate<'tcx>>,
             ) -> impl Iterator<Item = PolyTraitPredicate<'tcx>> {
                 let tcx = s.base().tcx;
+                // TODO: this is bad
                 let generics = self.skip_binder().trait_ref.args;
                 predicates
                     .filter_map(|pred| pred.as_trait_clause())
@@ -162,6 +165,8 @@ pub mod rustc {
             #[tracing::instrument(level = "trace", skip(s))]
             fn parents_trait_predicates(self, s: &S) -> Vec<(usize, PolyTraitPredicate<'tcx>)> {
                 let tcx = s.base().tcx;
+                let def_id = self.def_id();
+                tracing::trace!(?def_id);
                 let predicates = tcx
                     .predicates_defined_on_or_above(self.def_id())
                     .into_iter()
@@ -234,10 +239,19 @@ pub mod rustc {
             let mut seen = std::collections::HashSet::new();
 
             while let Some(candidate) = candidates.pop_front() {
+                // tracing::trace!(?candidate.path);
                 {
                     // If a predicate was already seen, we know it is
                     // not the one we are looking for: we skip it.
-                    if seen.contains(&candidate.pred) {
+                    if seen.iter().any(|seen_pred: &PolyTraitPredicate<'tcx>| {
+                        predicate_equality(
+                            candidate.pred.upcast(tcx),
+                            (*seen_pred).upcast(tcx),
+                            param_env,
+                            s,
+                        )
+                    }) {
+                        // if seen.contains(&candidate.pred) {
                         continue;
                     }
                     seen.insert(candidate.pred);
@@ -262,6 +276,7 @@ pub mod rustc {
                     });
                 }
                 for (item, binder) in candidate.pred.associated_items_trait_predicates(s) {
+                    // TODO: this is bad
                     for (index, parent_pred) in binder.skip_binder().into_iter() {
                         let mut path = candidate.path.clone();
                         path.push(PathChunk::AssocItem {
@@ -336,7 +351,7 @@ pub mod rustc {
             param_env: rustc_middle::ty::ParamEnv<'tcx>,
         ) -> ImplExpr {
             use rustc_trait_selection::traits::*;
-            let trait_ref: Binder<TraitRef> = self.sinto(s);
+            let trait_ref: Binder<TraitRef> = self.binder_sinto(s);
             match select_trait_candidate(s, param_env, *self) {
                 ImplSource::UserDefined(ImplSourceUserDefinedData {
                     impl_def_id,
@@ -364,7 +379,7 @@ pub mod rustc {
                         .as_trait_clause()
                         .s_unwrap(s)
                         .to_poly_trait_ref()
-                        .sinto(s);
+                        .binder_sinto(s);
                     let path = path.sinto(s);
                     if apred.is_extra_self_predicate {
                         ImplExprAtom::SelfImpl { r#trait, path }
