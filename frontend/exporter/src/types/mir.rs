@@ -956,6 +956,8 @@ pub struct BasicBlockData {
     pub statements: Vec<Statement>,
     pub terminator: Option<Terminator>,
     pub is_cleanup: bool,
+    pub loop_break_block: Option<BasicBlock>,
+    pub switch_merge_block: Option<BasicBlock>,
 }
 
 make_idx_wrapper!(rustc_middle::mir, BasicBlock);
